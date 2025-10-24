@@ -12,4 +12,5 @@ pg_data/
 dbt_packages/
 logs/
 target/
+# mac files
 .DS_Store
