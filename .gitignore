@@ -19,3 +19,5 @@ target/
 .terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
+# Environment files
+.env
