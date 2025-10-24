@@ -1,0 +1,14 @@
+# Python virtual environment
+venv/
+__pycache__/
+
+# Docker data volumes
+pg_data/
+
+# Airflow environment file
+.env
+
+# dbt artifacts
+dbt_packages/
+logs/
+target/

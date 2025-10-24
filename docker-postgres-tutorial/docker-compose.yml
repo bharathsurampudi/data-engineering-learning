@@ -1,0 +1,35 @@
+# Defines the version of the compose file format
+version: '3.8'
+
+# 'services' are the containers you want to run
+services:
+
+  # This is the custom name for our service
+  postgres_db:
+
+    # 'image' tells Docker which blueprint to use
+    image: postgres:13
+
+    # 'environment' sets environment variables inside the container
+    # This is how we configure the database
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydatabase
+
+    # 'ports' maps your computer's port to the container's port
+    # Format: "HOST_PORT:CONTAINER_PORT"
+    # This lets you connect to "localhost:5432" to access the database
+    ports:
+      - "5432:5432"
+
+    # 'volumes' make your data persistent
+    # This links a folder on your computer (./pg_data) to the
+    # folder inside the container where Postgres stores data.
+    # WITHOUT THIS, YOUR DATA IS DELETED WHEN THE CONTAINER STOPS.
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+
+# This top-level 'volumes' entry tells Docker to manage the volume
+volumes:
+  pg_data:
