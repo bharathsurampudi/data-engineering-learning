@@ -14,3 +14,8 @@ logs/
 target/
 # mac files
 .DS_Store
+# Terraform files
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
