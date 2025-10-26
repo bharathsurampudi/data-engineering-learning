@@ -1,34 +1,90 @@
-Simple Batch Data Pipeline (API to S3 to dbt via Airflow)Project GoalThis project implements a foundational batch data pipeline using a modern ELT (Extract, Load, Transform) approach. It demonstrates core data engineering principles by orchestrating the flow of data from a public API into cloud storage (AWS S3) and transforming it within a local data warehouse (PostgreSQL) using dbt, all managed by Apache Airflow.The primary objective is to showcase practical skills in building, configuring, and running a data pipeline using industry-standard tools, suitable for a data engineering portfolio.Tech Stack & Component RolesThis pipeline utilizes several key technologies, each playing a specific role:Apache Airflow (Orchestrator):Role: Acts as the central brain of the pipeline. It defines the workflow (DAG), schedules runs (e.g., daily), triggers tasks in the correct order, handles dependencies between tasks, monitors execution, logs output, and manages retries on failure.Setup: Runs via Docker Compose using the official Airflow image. Requires configuration of connections (AWS, Postgres) via the UI and installation of necessary Python packages (astronomer-cosmos, boto3, etc.) defined in docker-compose.yaml.dbt (Data Build Tool - Transformation):Role: Handles the "T" in ELT. Transforms raw data loaded into Postgres into clean, reliable, analytics-ready tables using SQL SELECT statements defined in .sql models. Manages dependencies between models and runs data quality tests.Setup: The dbt project files reside in dbt_project/. It requires a profiles.yml (typically outside the project, e.g., in ~/.dbt/) for local runs, defining connection details to the Postgres database. Airflow uses astronomer-cosmos to parse this project and run models/tests.Astronomer Cosmos (Airflow-dbt Integration):Role: An Airflow provider that dynamically generates Airflow tasks or task groups directly from a dbt project. It allows Airflow to run dbt models and tests as native Airflow tasks, leveraging Airflow connections for database credentials.Setup: Installed as a Python package within the Airflow Docker environment (_PIP_ADDITIONAL_REQUIREMENTS in docker-compose.yaml). Configured within the Airflow DAG (pipeline_dag.py) via ProjectConfig and ProfileConfig.AWS S3 (Data Lake / Cloud Storage):Role: Serves as the landing zone (data lake) for raw, unprocessed data extracted from the API. Provides scalable, durable, and cost-effective storage.Setup: The S3 bucket is provisioned using Terraform. Airflow requires an AWS connection (aws_default) with appropriate credentials (Access Key ID and Secret Access Key) to interact with the bucket (e.g., upload files).PostgreSQL (Data Warehouse):Role: Acts as the data warehouse where transformations occur. Stores both the raw data (loaded from S3/local file in this simulation) and the final transformed tables created by dbt.Setup: Runs as a service within Docker Compose (either alongside Airflow or separately). Airflow and dbt require connection details (host, port, user, password, database name) configured via Airflow connections and dbt profiles.Terraform (Infrastructure as Code):Role: Manages the cloud infrastructure (the S3 bucket) declaratively. Ensures the required AWS resources are created consistently and can be easily destroyed.Setup: Terraform code (.tf files) resides in the terraform/ directory. Requires AWS CLI configured with credentials (aws configure) to interact with your AWS account. The bucket name must be globally unique.Python (Extraction & Glue Code):Role: Used for scripting tasks within Airflow. Specifically, fetching data from the API (requests library) and uploading the data file to S3 (boto3 library).Setup: Scripts are placed in python_scripts/. Required libraries (requests, boto3, pandas) must be installed in the Airflow Docker environment.Docker & Docker Compose (Containerization):Role: Provides isolated, reproducible environments for running services like Airflow and Postgres. Simplifies setup and dependency management, ensuring the pipeline runs consistently across different machines.Setup: Configuration is defined in docker-compose.yaml files within the airflow/ directory (and potentially a separate one for Postgres if not combined). Defines services, networks, volumes, and environment variables.Data Flow Explained (ELT)Extract (Airflow PythonOperator):The Airflow DAG starts with a task executing the python_scripts/extract_api_data.py script.This script uses the requests library to make an HTTP GET request to the https://jsonplaceholder.typicode.com/posts endpoint.The JSON response (a list of post objects) is received.The script saves this list as a JSON file (e.g., posts.json) to a temporary location accessible by the Airflow worker (often a mounted volume).Load (Airflow PythonOperator / S3 Hook):The next task in the DAG uses Python with the boto3 library (or potentially Airflow's S3Hook/S3CopyObjectOperator) to upload the posts.json file from the worker's temporary location to the pre-configured AWS S3 bucket (e.g., s3://your-unique-bucket-name/raw/posts.json). This marks the completion of the "Load" phase into the data lake.Simulated Load to Warehouse:Note: This step is simplified for this project. Before dbt runs, the data needs to be in a raw table within Postgres. In a real pipeline, this could be another Airflow task using S3ToPostgresOperator, a database-native tool (like COPY command triggered via Airflow), or dbt might read directly from S3 if using a warehouse like Snowflake/Redshift/BigQuery. For this project, you might manually load the JSON or have a simple setup script.Transform (Airflow DbtTaskGroup via Cosmos):Airflow triggers the DbtTaskGroup.cosmos uses the specified Airflow Postgres connection (dbt_postgres_conn) to generate dbt profile information.It invokes the dbt run command within the Airflow environment, targeting the dbt project mounted at /opt/airflow/dbt_project.dbt connects to the Postgres database and executes the SQL models defined in dbt_project/models/ (e.g., creating stg_posts and fct_posts).After dbt run succeeds, cosmos invokes dbt test to run data quality checks defined in the dbt project's schema files (.yml).Orchestration (Airflow):The overarching Airflow DAG (airflow/dags/pipeline_dag.py) defines the dependencies: Extract must succeed before Load, and Load must succeed before Transform (dbt tasks).Airflow's scheduler runs this entire sequence based on the defined schedule (@daily).Airflow's UI provides visibility into runs, task statuses, logs, and allows for manual triggering and retries.Infrastructure Management (Terraform):Run separately before starting the pipeline. The commands terraform init, terraform plan, and terraform apply in the terraform/ directory ensure the target S3 bucket exists. terraform destroy removes it.Project Structure Explainedsimple-data-pipeline/
-├── airflow/                 # Contains all Airflow-specific configurations
-│   ├── dags/                # Location for Airflow DAG Python files
-│   │   └── pipeline_dag.py  # Defines the main pipeline workflow and tasks
-│   ├── Dockerfile           # (Optional) Extends the base Airflow image if needed
-│   └── docker-compose.yaml  # Defines Airflow services (webserver, scheduler, worker, triggerer), network, volumes, and dependencies (Postgres, Redis, Python packages)
-├── dbt_project/             # Standard dbt project directory structure
-│   ├── models/              # Contains SQL transformation logic
-│   │   ├── staging/         # Models for basic cleaning/renaming of raw data
-│   │   └── marts/           # Models for final analytics-ready tables
-│   ├── dbt_project.yml      # Main dbt project configuration file (name, profile, model paths, etc.)
-│   └── ...                  # Other dbt folders: tests/, seeds/, macros/, analyses/, snapshots/
-├── python_scripts/          # Directory for standalone Python scripts called by Airflow tasks
-│   └── extract_api_data.py  # Script to fetch data from the API
-├── terraform/               # Infrastructure as Code for AWS resources
-│   ├── main.tf              # Defines the AWS provider and the S3 bucket resource
-│   └── variables.tf         # (Optional) For defining input variables (like region, bucket prefix)
-└── README.md                # This detailed explanation file
-Setup & Running (Detailed)Prerequisites: Ensure all required tools (AWS CLI, Terraform CLI, Docker, Python, Git) are installed and configured as outlined previously.Steps:Clone: Get the code:git clone <your-repo-url>
-cd simple-data-pipeline
-Infrastructure (Terraform): Create the S3 bucket.cd terraformCRITICAL: Edit main.tf and change bucket = "..." to a globally unique name. Use hyphens, lowercase letters, and numbers. Add your initials or random numbers.Run terraform init to download the AWS provider.Run terraform plan to preview the changes (should show 1 resource to create).Run terraform apply and type yes to create the bucket.cd ..dbt Profile: Configure how dbt connects locally (used by cosmos indirectly and for local testing).Locate or create ~/.dbt/profiles.yml (in your user home directory).Add an entry matching the profile: name in dbt_project/dbt_project.yml. Ensure host, port, user, password, dbname point to the Postgres container defined in your Airflow docker-compose.yaml. The host might be localhost if accessing from your host machine, but might be the service name (e.g., postgres) if connecting from another container. Use the correct credentials.# Example for profile named 'my_first_project' connecting to Docker Postgres
-my_first_project:
-  target: dev
-  outputs:
-    dev:
-      type: postgres
-      host: localhost # Or 'postgres' service name from docker-compose
-      port: 5432
-      user: airflow # Or postgres user from docker-compose
-      password: airflow # Or postgres password from docker-compose
-      dbname: airflow # Or postgres db name from docker-compose
-      schema: public # Default schema for dbt output initially
-      threads: 1
-Airflow Setup: Prepare and start Airflow services.cd airflowReview docker-compose.yaml:Confirm a postgres service is defined (or linked externally).Verify necessary volumes are mounted: ./dags:/opt/airflow/dags, ../python_scripts:/opt/airflow/scripts, ../dbt_project:/opt/airflow/dbt_project.Check _PIP_ADDITIONAL_REQUIREMENTS under x-airflow-common -> environment. It must include --constraint <URL> astronomer-cosmos[dbt-postgres] requests pandas boto3. Add any other required Python libs here.Run docker-compose up -d --build. This builds the image (installing packages) and starts all services (webserver, scheduler, postgres, redis). Wait for completion.Wait 1-2 minutes for Airflow components to fully initialize.Airflow Connections: Configure how Airflow tasks connect to external systems.Go to http://localhost:8080, log in (airflow/airflow).Go to Admin -> Connections -> + Add a new record.Create Postgres Connection:Conn Id: dbt_postgres_conn (must match conn_id in your DAG's ProfileConfig)Conn Type: PostgresHost: postgres (This is typically the service name defined in docker-compose.yaml)Schema: airflow (Or the Postgres database name defined in docker-compose.yaml)Login: airflow (Or the Postgres user from docker-compose.yaml)Password: airflow (Or the Postgres password from docker-compose.yaml)Port: 5432Click Save.Create AWS Connection:Conn Id: aws_default (Standard convention used by many AWS operators/hooks)Conn Type: Amazon Web ServicesAWS Access Key ID: Paste your IAM user's Access Key ID.AWS Secret Access Key: Paste your IAM user's Secret Access Key.(Optional) Specify region if needed.Click Save.Run Pipeline: Execute the workflow.In the Airflow UI (DAGs view), find your pipeline DAG (e.g., dbt_orchestration_taskgroup_dag). It might take a minute to appear after startup.Click the toggle to un-pause it.Click the play button (▶️) to trigger a manual run.Monitor the progress in the Grid or Graph view. Check task logs for details or errors.Destroying InfrastructureWhen finished, remove the S3 bucket to avoid AWS charges.cd terraformterraform destroy (and confirm with yes)cd ..Future ImprovementsAutomated S3->Postgres Loading: Implement this crucial step using Airflow operators or a dedicated Python task.Cloud Data Warehouse: Migrate from local Postgres to Snowflake/Redshift/BigQuery, managing it with Terraform.Error Handling/Alerting: Add mechanisms (e.g., Airflow email/Slack alerts) for pipeline failures.Parameterization: Use Airflow Variables/Connections to make API endpoints, bucket names, etc., configurable without changing code.Enhanced Testing: Add more dbt tests and potentially data validation in the Python extraction step.Schema Management: Introduce schema validation (e.g., using Pydantic for API responses) or schema evolution tools.
+## Setup & Running (Detailed)
+
+**Prerequisites:** Ensure all required tools (AWS CLI, Terraform CLI, Docker, Python, Git) are installed and configured as outlined previously.
+
+**Steps:**
+
+1.  **Clone:** Get the code:
+    ```bash
+    git clone <your-repo-url>
+    cd simple-data-pipeline
+    ```
+
+2.  **Infrastructure (Terraform):** Create the S3 bucket.
+    * `cd terraform`
+    * **CRITICAL:** Edit `main.tf` and change `bucket = "..."` to a **globally unique name**. Use hyphens, lowercase letters, and numbers. Add your initials or random numbers.
+    * Run `terraform init` to download the AWS provider.
+    * Run `terraform plan` to preview the changes (should show 1 resource to create).
+    * Run `terraform apply` and type `yes` to create the bucket.
+    * `cd ..`
+
+3.  **dbt Profile:** Configure how dbt connects locally (used by `cosmos` indirectly and for local testing).
+    * Locate or create `~/.dbt/profiles.yml` (in your user home directory).
+    * Add an entry matching the `profile:` name in `dbt_project/dbt_project.yml`. Ensure `host`, `port`, `user`, `password`, `dbname` point to the **Postgres container** defined in your Airflow `docker-compose.yaml`. The `host` might be `localhost` if accessing from your host machine, but might be the *service name* (e.g., `postgres`) if connecting from another container. Use the correct credentials.
+        ```yaml
+        # Example for profile named 'my_first_project' connecting to Docker Postgres
+        my_first_project:
+          target: dev
+          outputs:
+            dev:
+              type: postgres
+              host: localhost # Or 'postgres' service name from docker-compose
+              port: 5432
+              user: airflow # Or postgres user from docker-compose
+              password: airflow # Or postgres password from docker-compose
+              dbname: airflow # Or postgres db name from docker-compose
+              schema: public # Default schema for dbt output initially
+              threads: 1
+        ```
+
+4.  **Airflow Setup:** Prepare and start Airflow services.
+    * `cd airflow`
+    * **Review `docker-compose.yaml`:**
+        * Confirm a `postgres` service is defined (or linked externally).
+        * Verify necessary **volumes** are mounted: `./dags:/opt/airflow/dags`, `../python_scripts:/opt/airflow/scripts`, `../dbt_project:/opt/airflow/dbt_project`.
+        * Check `_PIP_ADDITIONAL_REQUIREMENTS` under `x-airflow-common` -> `environment`. It **must** include `--constraint <URL> astronomer-cosmos[dbt-postgres] requests pandas boto3`. Add any other required Python libs here.
+    * Run `docker-compose up -d --build`. This builds the image (installing packages) and starts all services (webserver, scheduler, postgres, redis). Wait for completion.
+    * **Wait 1-2 minutes** for Airflow components to fully initialize.
+
+5.  **Airflow Connections:** Configure how Airflow tasks connect to external systems.
+    * Go to `http://localhost:8080`, log in (`airflow`/`airflow`).
+    * Go to **Admin -> Connections -> + Add a new record**.
+    * **Create Postgres Connection:**
+        * `Conn Id`: `dbt_postgres_conn` (must match `conn_id` in your DAG's `ProfileConfig`)
+        * `Conn Type`: `Postgres`
+        * `Host`: `postgres` (This is typically the service name defined in `docker-compose.yaml`)
+        * `Schema`: `airflow` (Or the Postgres database name defined in `docker-compose.yaml`)
+        * `Login`: `airflow` (Or the Postgres user from `docker-compose.yaml`)
+        * `Password`: `airflow` (Or the Postgres password from `docker-compose.yaml`)
+        * `Port`: `5432`
+        * Click **Save**.
+    * **Create AWS Connection:**
+        * `Conn Id`: `aws_default` (Standard convention used by many AWS operators/hooks)
+        * `Conn Type`: `Amazon Web Services`
+        * `AWS Access Key ID`: Paste your IAM user's Access Key ID.
+        * `AWS Secret Access Key`: Paste your IAM user's Secret Access Key.
+        * (Optional) Specify region if needed.
+        * Click **Save**.
+
+6.  **Run Pipeline:** Execute the workflow.
+    * In the Airflow UI (DAGs view), find your pipeline DAG (e.g., `dbt_orchestration_taskgroup_dag`). It might take a minute to appear after startup.
+    * Click the toggle to un-pause it.
+    * Click the play button (▶️) to trigger a manual run.
+    * Monitor the progress in the Grid or Graph view. Check task logs for details or errors.
+
+## Destroying Infrastructure
+
+When finished, remove the S3 bucket to avoid AWS charges.
+
+1.  `cd terraform`
+2.  `terraform destroy` (and confirm with `yes`)
+3.  `cd ..`
+
+## Future Improvements
+
+* **Automated S3->Postgres Loading:** Implement this crucial step using Airflow operators or a dedicated Python task.
+* **Cloud Data Warehouse:** Migrate from local Postgres to Snowflake/Redshift/BigQuery, managing it with Terraform.
+* **Error Handling/Alerting:** Add mechanisms (e.g., Airflow email/Slack alerts) for pipeline failures.
+* **Parameterization:** Use Airflow Variables/Connections to make API endpoints, bucket names, etc., configurable without changing code.
+* **Enhanced Testing:** Add more dbt tests and potentially data validation in the Python extraction step.
+* **Schema Management:** Introduce schema validation (e.g., using Pydantic for API responses) or schema evolution tools.
